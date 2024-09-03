@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GetStream/stream-backend-homework-assignment/api/constants"
 	"github.com/neilotoole/slogt"
 )
 
@@ -365,6 +366,151 @@ func TestAPI_createMessage(t *testing.T) {
 	}
 }
 
+func TestAPI_createMessageV2(t *testing.T) {
+	tests := []struct {
+		name        string
+		cache       *testcache
+		db          *testdb
+		req         string
+		wantStatus  int
+		wantBody    string
+		containsLog string
+	}{
+		{
+			name:       "InvalidJSON",
+			req:        `not json`,
+			wantStatus: 400,
+			wantBody: `{
+				"error": "Could not decode request body"
+			}`,
+		},
+		{
+			name: "DBError",
+			req: `{
+				"text": "hello",
+				"user_id": "test"
+			}`,
+			db: &testdb{
+				insertMessage: func(t *testing.T, msg Message) (Message, error) {
+					return Message{}, errors.New("something went wrong")
+				},
+			},
+			wantStatus: 500,
+			wantBody: `{
+				"error": "Could not insert v2 message"
+			}`,
+		},
+		{
+			name: "CacheError",
+			req: `{
+				"text": "hello",
+				"user_id": "test"
+			}`,
+			cache: &testcache{
+				insertMessage: func(t *testing.T, msg Message) error {
+					return errors.New("something went wrong")
+				},
+			},
+			db: &testdb{
+				insertMessage: func(t *testing.T, msg Message) (Message, error) {
+					return Message{
+						ID:              "1",
+						Text:            msg.Text,
+						UserID:          msg.UserID,
+						ReactionScore:   0,
+						ListOfReactions: []constants.ReactionType{},
+						CreatedAt:       time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+					}, nil
+				},
+			},
+			wantStatus: 201,
+			wantBody: `{
+				"id": "1",
+				"text": "hello",
+				"user_id": "test",
+				"reaction_list": [],
+				"reaction_score": 0,
+				"created_at": "Mon, 01 Jan 2024 00:00:00 UTC"
+			}`,
+			containsLog: "Could not cache message",
+		},
+		{
+			name: "OK",
+			req: `{
+				"text": "hello",
+				"user_id": "test"
+			}`,
+			db: &testdb{
+				insertMessage: func(t *testing.T, msg Message) (Message, error) {
+					if msg.UserID != "test" {
+						t.Errorf("Got UserID %q, want test", msg.UserID)
+					}
+					if msg.Text != "hello" {
+						t.Errorf("Got Text %q, want test", msg.Text)
+					}
+					return Message{
+						ID:              "1",
+						Text:            msg.Text,
+						UserID:          msg.UserID,
+						ReactionScore:   0,
+						ListOfReactions: []constants.ReactionType{},
+						CreatedAt:       time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+					}, nil
+				},
+			},
+			cache: &testcache{
+				insertMessage: func(t *testing.T, msg Message) error {
+					if msg.UserID != "test" {
+						t.Errorf("Got UserID %q, want test", msg.UserID)
+					}
+					if msg.Text != "hello" {
+						t.Errorf("Got Text %q, want test", msg.Text)
+					}
+					return nil
+				},
+			},
+			wantStatus: 201,
+			wantBody: `{
+				"id": "1",
+				"text": "hello",
+				"user_id": "test",
+				"reaction_list": [],
+				"reaction_score": 0,
+				"created_at": "Mon, 01 Jan 2024 00:00:00 UTC"
+			}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := &bytes.Buffer{}
+			if tt.db != nil {
+				tt.db.T = t
+			}
+			if tt.cache != nil {
+				tt.cache.T = t
+			}
+			api := &API{
+				DB:     tt.db,
+				Cache:  tt.cache,
+				Logger: slog.New(slog.NewTextHandler(buf, nil)),
+			}
+
+			srv := httptest.NewServer(api)
+			defer srv.Close()
+
+			req, _ := http.NewRequest("POST", srv.URL+"/v2/messages", strings.NewReader(tt.req))
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkStatus(t, resp.StatusCode, tt.wantStatus)
+			checkBody(t, resp, tt.wantBody)
+			checkLog(t, buf, tt.containsLog)
+		})
+	}
+}
+
 func TestAPI_createReaction(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -377,25 +523,25 @@ func TestAPI_createReaction(t *testing.T) {
 		{
 			name: "OK",
 			req: `{
-				"type": "thumbs_up",
+				"reaction_type": "Like",
 				"user_id": "test"
 			}`,
 			messageID: "12345",
 			db: &testdb{
-				insertReaction: func(t *testing.T, reaction Reaction) (Reaction, error) {
+				insertReactionAndUpdateMessage: func(t *testing.T, reaction ReactionV2) (ReactionV2, error) {
 					if reaction.UserID != "test" {
 						t.Errorf("Got UserID %q, want test", reaction.UserID)
 					}
-					if reaction.Type != "thumbsup" {
-						t.Errorf("Got Text %q, want test", reaction.Type)
+					if reaction.ReactionType != "Like" {
+						t.Errorf("Got Text %q, want test", reaction.ReactionType)
 					}
-					return Reaction{
-						ID:        "1",
-						MessageID: "12345",
-						Score:     1,
-						Type:      reaction.Type,
-						UserID:    reaction.UserID,
-						CreatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+					return ReactionV2{
+						ID:            "1",
+						MessageID:     "12345",
+						ReactionScore: 1,
+						ReactionType:  reaction.ReactionType,
+						UserID:        reaction.UserID,
+						CreatedAt:     time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 					}, nil
 				},
 			},
@@ -403,7 +549,8 @@ func TestAPI_createReaction(t *testing.T) {
 			wantBody: `{
 				"id": "1",
 				"message_id": "12345",
-				"type": "thumbs_up",
+				"reaction_type": "Like",
+				"reaction_score":1,
 				"user_id": "test",
 				"created_at": "Mon, 01 Jan 2024 00:00:00 UTC"
 			}`,
@@ -436,10 +583,12 @@ func TestAPI_createReaction(t *testing.T) {
 }
 
 type testdb struct {
-	T              *testing.T
-	listMessages   func(t *testing.T, offset, limit int) ([]Message, error)
-	insertMessage  func(t *testing.T, msg Message) (Message, error)
-	insertReaction func(t *testing.T, reaction Reaction) (Reaction, error)
+	T                              *testing.T
+	listMessages                   func(t *testing.T, offset, limit int) ([]Message, error)
+	insertMessage                  func(t *testing.T, msg Message) (Message, error)
+	insertReaction                 func(t *testing.T, reaction ReactionV2) (ReactionV2, error)
+	findMessage                    func(t *testing.T, msgId string) error
+	insertReactionAndUpdateMessage func(t *testing.T, react ReactionV2) (ReactionV2, error)
 }
 
 func (db *testdb) ListMessages(_ context.Context, offset, limit int) ([]Message, error) {
@@ -450,8 +599,16 @@ func (db *testdb) InsertMessage(_ context.Context, msg Message) (Message, error)
 	return db.insertMessage(db.T, msg)
 }
 
-func (db *testdb) InsertReaction(_ context.Context, reaction Reaction) (Reaction, error) {
+func (db *testdb) InsertReaction(_ context.Context, reaction ReactionV2) (ReactionV2, error) {
 	return db.insertReaction(db.T, reaction)
+}
+
+func (db *testdb) FindMessage(_ context.Context, msgId string) error {
+	return db.findMessage(db.T, msgId)
+}
+
+func (db *testdb) InsertReactionAndUpdateMessage(_ context.Context, react ReactionV2) (ReactionV2, error) {
+	return db.insertReactionAndUpdateMessage(db.T, react)
 }
 
 type testcache struct {
