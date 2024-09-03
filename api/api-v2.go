@@ -1,70 +1,49 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/GetStream/stream-backend-homework-assignment/api/constants"
 	"github.com/GetStream/stream-backend-homework-assignment/api/schemas"
 	"github.com/GetStream/stream-backend-homework-assignment/api/types"
+	"github.com/GetStream/stream-backend-homework-assignment/api/utils"
 	"github.com/GetStream/stream-backend-homework-assignment/api/validators"
 )
 
-func (a *API) listMessagesV2(w http.ResponseWriter, r *http.Request) {
-	page := r.URL.Query().Get("page")
-	pageNumber := 1
-	if page != "" {
-		pageNumberInt, err := strconv.Atoi(page)
-		if err != nil {
-			a.respondError(w, http.StatusBadRequest, err, "Invalid Page")
-
-		}
-		pageNumber = pageNumberInt
-	}
-
-	// input validation
-	if err := validators.ValidateListQueryRequest(schemas.ListRequestQuery{
-		PageNumber: pageNumber,
-	}); err != nil {
-		a.respondError(w, http.StatusBadRequest, err, fmt.Sprintf("Validation failed: %v", err))
-		return
-	}
-
-	pageSize := 10
-	var msgs []Message
-	offset := (pageNumber - 1) * pageSize
-
+func (a *API) FindMessages(ctx context.Context, pageNumber, offset, pageSize int) ([]Message, error) {
 	if pageNumber == 1 {
-		msgsFromCache, err := a.Cache.ListMessages(r.Context(), pageSize)
+		msgsFromCache, err := a.Cache.ListMessages(ctx, pageSize)
 		if err != nil {
-			a.respondError(w, http.StatusInternalServerError, err, "Could not list messages")
-			return
+			return nil, fmt.Errorf("error fetching messages from cache: %w", err)
 		}
-		msgs = append(msgs, msgsFromCache...)
-		remain := pageSize - len(msgs)
-		if remain > 0 {
-			a.Logger.Info("Fetched some records from cache, remaining: ", "remain", remain)
-			dbMsgs, err := a.DB.ListMessages(r.Context(), len(msgsFromCache), remain)
-			if err != nil {
-				a.respondError(w, http.StatusInternalServerError, err, "Could not list messages")
-				return
-			}
-			msgs = append(msgs, dbMsgs...)
+		if len(msgsFromCache) == pageSize {
+			return msgsFromCache, nil
 		}
-	} else {
-		a.Logger.Info("Fetching messages from db...", fmt.Sprint(offset), pageSize)
-		dbMsgs, err := a.DB.ListMessages(r.Context(), offset, pageSize)
+
+		remain := pageSize - len(msgsFromCache)
+		a.Logger.Info("Fetched partial records from cache, fetching remaining from DB", "remaining", remain)
+
+		dbMsgs, err := a.DB.ListMessages(ctx, len(msgsFromCache), remain)
 		if err != nil {
-			a.respondError(w, http.StatusInternalServerError, err, "Could not list messages")
-			return
+			return nil, fmt.Errorf("error fetching remaining messages from DB: %w", err)
 		}
-		a.Logger.Info("Got messages from DB", "count", len(dbMsgs))
-		msgs = append(msgs, dbMsgs...)
+		return append(msgsFromCache, dbMsgs...), nil
 	}
 
+	a.Logger.Info("Fetching messages from DB...", "offset", offset, "limit", pageSize)
+	dbMsgs, err := a.DB.ListMessages(ctx, offset, pageSize)
+	if err != nil {
+		return nil, fmt.Errorf("error fetching messages from DB: %w", err)
+	}
+	a.Logger.Info("Got messages from DB", "count", len(dbMsgs))
+	return dbMsgs, nil
+}
+
+func TransformMessagesToResponse(msgs []Message) []types.Message {
 	out := make([]types.Message, len(msgs))
 	for i, msg := range msgs {
 		out[i] = types.Message{
@@ -76,11 +55,37 @@ func (a *API) listMessagesV2(w http.ResponseWriter, r *http.Request) {
 			CreatedAt:       msg.CreatedAt.Format(time.RFC1123),
 		}
 	}
-	res := schemas.ListResponse{
-		Messages: out,
+	return out
+}
+
+func (a *API) listMessagesV2(w http.ResponseWriter, r *http.Request) {
+	pageNumber, err := utils.GetPageNumber(r.URL.Query().Get("page"))
+	if err != nil {
+		a.respondError(w, http.StatusBadRequest, err, "Invalid Page")
+		return
 	}
 
-	a.respond(w, http.StatusOK, res)
+	// input validation
+	if err := validators.ValidateListQueryRequest(schemas.ListRequestQuery{
+		PageNumber: pageNumber,
+	}); err != nil {
+		a.respondError(w, http.StatusBadRequest, err, fmt.Sprintf("Validation failed: %v", err))
+		return
+	}
+
+	// TODO: can be moved to env or dedicated config manager
+	const pageSize = 10
+	offset := (pageNumber - 1) * pageSize
+
+	msgs, err := a.FindMessages(r.Context(), pageNumber, offset, pageSize)
+	if err != nil {
+		a.respondError(w, http.StatusInternalServerError, err, "Could not list messages")
+		return
+	}
+
+	out := TransformMessagesToResponse(msgs)
+
+	a.respond(w, http.StatusOK, schemas.ListResponse{Messages: out})
 }
 
 func (a *API) createMessageV2(w http.ResponseWriter, r *http.Request) {

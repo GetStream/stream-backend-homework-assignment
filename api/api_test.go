@@ -229,6 +229,234 @@ func TestAPI_listMessages(t *testing.T) {
 	}
 }
 
+func TestAPI_listMessagesV2(t *testing.T) {
+	tests := []struct {
+		name       string
+		db         *testdb
+		cache      *testcache
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			name: "DBError",
+			cache: &testcache{
+				listMessages: func(t *testing.T, limit int) ([]Message, error) {
+					return nil, nil
+				},
+			},
+			db: &testdb{
+				listMessages: func(t *testing.T, offset, limit int) ([]Message, error) {
+					return nil, errors.New("something went wrong")
+				},
+			},
+			wantStatus: 500,
+			wantBody: `{
+				"error": "Could not list messages"
+			}`,
+		},
+		{
+			name: "CacheError",
+			cache: &testcache{
+				listMessages: func(t *testing.T, limit int) ([]Message, error) {
+					return nil, errors.New("something went wrong")
+				},
+			},
+			db: &testdb{
+				listMessages: func(t *testing.T, offset, limit int) ([]Message, error) {
+					return nil, nil
+				},
+			},
+			wantStatus: 500,
+			wantBody: `{
+				"error": "Could not list messages"
+			}`,
+		},
+		{
+			name: "Empty",
+			cache: &testcache{
+				listMessages: func(t *testing.T, limit int) ([]Message, error) {
+					return nil, nil
+				},
+			},
+			db: &testdb{
+				listMessages: func(t *testing.T, offset, limit int) ([]Message, error) {
+					return nil, nil
+				},
+			},
+			wantStatus: 200,
+			wantBody: `{
+				"messages": []
+			}`,
+		},
+		{
+			name: "Cache",
+			cache: &testcache{
+				listMessages: func(t *testing.T, limit int) ([]Message, error) {
+					if limit != 10 {
+						t.Errorf("Wrong limit: %d", limit)
+					}
+					return []Message{
+						{
+							ID:              "1",
+							Text:            "Hello",
+							UserID:          "testuser",
+							ReactionScore:   0,
+							ListOfReactions: []constants.ReactionType{},
+							CreatedAt:       time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+						},
+					}, nil
+				},
+			},
+			db: &testdb{
+				listMessages: func(t *testing.T, offset, limit int) ([]Message, error) {
+					// Nothing in DB.
+					return nil, nil
+				},
+			},
+			wantStatus: 200,
+			wantBody: `{
+				"messages": [
+					{
+						"id": "1",
+						"text": "Hello",
+						"user_id": "testuser",
+						"reaction_list": [],
+						"reaction_score": 0,
+						"created_at": "Mon, 01 Jan 2024 00:00:00 UTC"
+					}
+				]
+			}`,
+		},
+		{
+			name: "DB",
+			cache: &testcache{
+				listMessages: func(t *testing.T, limit int) ([]Message, error) {
+					// Nothing in cache.
+					return nil, nil
+				},
+			},
+			db: &testdb{
+				listMessages: func(t *testing.T, offset, limit int) ([]Message, error) {
+					if offset != 0 {
+						t.Errorf("Wrong offset: %d", offset)
+					}
+					if limit != 10 {
+						t.Errorf("Wrong limit: %d", limit)
+					}
+					return []Message{
+						{
+							ID:              "1",
+							Text:            "Hello",
+							UserID:          "testuser",
+							ReactionScore:   0,
+							ListOfReactions: []constants.ReactionType{},
+							CreatedAt:       time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+						},
+					}, nil
+				},
+			},
+			wantStatus: 200,
+			wantBody: `{
+				"messages": [
+					{
+						"id": "1",
+						"text": "Hello",
+						"user_id": "testuser",
+						"reaction_list": [],
+						"reaction_score": 0,
+						"created_at": "Mon, 01 Jan 2024 00:00:00 UTC"
+					}
+				]
+			}`,
+		},
+		{
+			name: "Mixed",
+			cache: &testcache{
+				listMessages: func(t *testing.T, limit int) ([]Message, error) {
+					return []Message{
+						{
+							ID:              "1",
+							Text:            "Hello",
+							UserID:          "testuser",
+							ReactionScore:   0,
+							ListOfReactions: []constants.ReactionType{},
+							CreatedAt:       time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+						},
+					}, nil
+				},
+			},
+			db: &testdb{
+				listMessages: func(t *testing.T, offset, limit int) ([]Message, error) {
+					if offset != 1 { // 1 from cache.
+						t.Errorf("Wrong offset: %d", offset)
+					}
+					if limit != 9 { // 10 - 1 from cache.
+						t.Errorf("Wrong limit: %d", limit)
+					}
+					return []Message{
+						{
+							ID:              "2",
+							Text:            "World",
+							UserID:          "testuser",
+							ReactionScore:   0,
+							ListOfReactions: []constants.ReactionType{},
+							CreatedAt:       time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC),
+						},
+					}, nil
+				},
+			},
+			wantStatus: 200,
+			wantBody: `{
+				"messages": [
+					{
+						"id": "1",
+						"text": "Hello",
+						"user_id": "testuser",
+						"reaction_list": [],
+						"reaction_score": 0,
+						"created_at": "Mon, 01 Jan 2024 00:00:00 UTC"
+					},
+					{
+						"id": "2",
+						"text": "World",
+						"user_id": "testuser",
+						"reaction_list": [],
+						"reaction_score": 0,
+						"created_at": "Tue, 02 Jan 2024 00:00:00 UTC"
+					}
+				]
+			}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.db != nil {
+				tt.db.T = t
+			}
+			if tt.cache != nil {
+				tt.cache.T = t
+			}
+			api := &API{
+				DB:     tt.db,
+				Cache:  tt.cache,
+				Logger: slogt.New(t),
+			}
+
+			srv := httptest.NewServer(api)
+			defer srv.Close()
+
+			req, _ := http.NewRequest("GET", srv.URL+"/v2/messages", nil)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkStatus(t, resp.StatusCode, tt.wantStatus)
+			checkBody(t, resp, tt.wantBody)
+		})
+	}
+}
+
 func TestAPI_createMessage(t *testing.T) {
 	tests := []struct {
 		name        string
