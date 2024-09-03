@@ -168,6 +168,9 @@ CREATE TABLE IF NOT EXISTS reactions (
 ### Approach
 
 - Start with functional requirement and then improve the system for scalability, loose-coupling, and focus on other important metrics
+- Considering the backward compatibility, I have added `v2 versions` of the following APIs, Since the request and response schema has been updated
+  - Create Message
+  - List Messages
 
 ### Limitations
 
@@ -184,3 +187,34 @@ CREATE TABLE IF NOT EXISTS reactions (
   - Message Queue
 - Implement an API to update reaction or Remove it
 - Authentication and Authorization implementation
+
+### Sample Requests
+
+1. Create Messages (v2 Version)
+
+```bash
+curl --location 'http://localhost:8080/v2/messages' \
+--header 'Content-Type: application/json' \
+--data '{
+    "text": "hello",
+    "user_id": "testuser"
+}'
+```
+
+2. List Messages (v2 Version)
+
+```bash
+curl --location 'http://localhost:8080/v2/messages?page=1'
+```
+
+3. Create Reaction
+
+```bash
+curl --location 'http://localhost:8080/messages/fb964479-cee0-475c-8c27-fac099f12208/reactions' \
+--header 'Content-Type: application/json' \
+--data '{
+    "reaction_type": "Like",
+    "reaction_score": 1,
+    "user_id": "testuser"
+}'
+```
