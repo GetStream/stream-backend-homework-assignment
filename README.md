@@ -129,7 +129,7 @@ The following things are not part of the assignment, but if you feel like making
 
 ---
 
-## Assingment
+## Assingment Details, Assumptions & Approach
 
 ### Functional Requirements
 
@@ -179,7 +179,7 @@ CREATE TABLE IF NOT EXISTS reactions (
 - System is tightly coupled
 - Some constants are hard coded
 
-### Improvements
+### Potential Improvements
 
 - Move the hardcoded constants to config (read from .env)
 - Update cache as soon as reaction is created for a particular message
