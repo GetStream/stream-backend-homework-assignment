@@ -58,7 +58,7 @@ The tests will point to the same databases in docker compose.
 
 #### End-To-End tests
 
-A small [Hurl] script allows simulating real requests to the API. 
+A small [Hurl] script allows simulating real requests to the API.
 
 > The test assumes an empty starting point, so you may need to restart the
 > docker compose stack if data was previously inserted.
@@ -77,29 +77,32 @@ For this assignment we will provide you with a simple message (REST) API. The go
 The way the API is currently implemented, it's possible to create messages and retrieve a list of messages. We have also included an endpoint to add a reaction to a message. However, this endpoint is not implemented yet.
 
 A message consists of the following fields:
-* `ID` - a unique identifier for the message
-* `Text` - the content of the message
-* `UserID` - the user who created the message
-* `CreatedAt` - the timestamp when the message was created
+
+- `ID` - a unique identifier for the message
+- `Text` - the content of the message
+- `UserID` - the user who created the message
+- `CreatedAt` - the timestamp when the message was created
 
 The API has three endpoints:
-* `GET /messages` - returns a list of messages
-* `POST /messages` - creates a new message
-* `POST /messages/{messageID}/reactions` - adds a reaction to a message
+
+- `GET /messages` - returns a list of messages
+- `POST /messages` - creates a new message
+- `POST /messages/{messageID}/reactions` - adds a reaction to a message
 
 When a message is created (`POST /messages`), the message is inserted into the database (`messages` table). The message is also added to the message cache (Redis). The message cache is used to store the latest 10 messages. When a message is added to the cache, the oldest message is removed if the cache is full (ie. contains a maximum of 10 messages).
 When a list of messages is retrieved (`GET /messages`), the application first tries to fetch the messages from the message cache. If the cache does not contain the requested messages, the application fetches the messages from the database.
 
 Your task is to implement the missing functionality. These are the things we would like you to do:
+
 1. Create the database schema for the `reactions` table (`postgres/schema.sql`).
 2. We assume this API will be heavily used and therefor needs to support lots of read and write operations to the database. Update the schema accordingly.
 3. Implement the `POST /messages/{messageID}/reactions` endpoint. A reaction consists of the following fields:
-    * `ID` - a unique identifier for the reaction
-    * `MessageID` - the message to which the reaction is added
-    * `UserID` - the user who added the reaction
-    * `Type` - the type of the reaction (eg. like, love, laugh, etc.)
-    * `Score` - the score of the reaction (eg. 1, 2, 10, etc.) If no score is provided, the default score is 1. You can think of the score as claps on Medium.com.
-    * `CreatedAt` - the timestamp when the reaction was added.
+   - `ID` - a unique identifier for the reaction
+   - `MessageID` - the message to which the reaction is added
+   - `UserID` - the user who added the reaction
+   - `Type` - the type of the reaction (eg. like, love, laugh, etc.)
+   - `Score` - the score of the reaction (eg. 1, 2, 10, etc.) If no score is provided, the default score is 1. You can think of the score as claps on Medium.com.
+   - `CreatedAt` - the timestamp when the reaction was added.
 4. Extend the list messages endpoint (`GET /messages`) to allow for pagination. The endpoint currently only allows for fetching the latest 10 messages. We would like to be able to fetch messages in pages of 10 messages. For example, the first page should return messages 1-10, the second page should return messages 11-20, etc.
 5. Extend the list messages endpoint (`GET /messages`) to include the total reaction count as well as a list of reactions for each message.
 6. The endpoints currently don't validate the input. Please add input validation to the endpoints.
@@ -107,16 +110,111 @@ Your task is to implement the missing functionality. These are the things we wou
 We expect a certain level of seniority. Therefor we don't want to explicitly mention every detail you should think about. Think about this assignment as a real-world problem you need to solve. We expect you to make the necessary decisions to make the application (almost) production ready.
 
 ### Deliverables
+
 Please fork this repository and implement the missing functionality. An experienced engineer would most likely be able to complete the assignment in a few hours. When you are done, please send us a link to your repository.
 We will schedule a follow-up call to discuss your solution.
 
 ### Bonus points
+
 The following things are not part of the assignment, but if you feel like making the application production ready, you could do something with the following topics:
-* Improve robustness with graceful degradation when databases are down
-* Observability
+
+- Improve robustness with graceful degradation when databases are down
+- Observability
 
 ### Reading materials
-* [Stream's 10 week onboarding program](https://stream-wiki.notion.site/Stream-Go-10-Week-Backend-Eng-Onboarding-625363c8c3684753b7f2b7d829bcd67a)
 
+- [Stream's 10 week onboarding program](https://stream-wiki.notion.site/Stream-Go-10-Week-Backend-Eng-Onboarding-625363c8c3684753b7f2b7d829bcd67a)
 
 [Hurl]: https://hurl.dev/
+
+---
+
+## Assingment Details, Assumptions & Approach
+
+### Functional Requirements
+
+1. Create the database schema for the `reactions` table (`postgres/schema.sql`).
+2. Implement the `POST /messages/{messageID}/reactions` endpoint. A reaction consists of the following fields:
+   - `ID` - a unique identifier for the reaction
+   - `MessageID` - the message to which the reaction is added
+   - `UserID` - the user who added the reaction
+   - `Type` - the type of the reaction (eg. like, love, laugh, etc.)
+   - `Score` - the score of the reaction (eg. 1, 2, 10, etc.) If no score is provided, the default score is 1. You can think of the score as claps on Medium.com.
+   - `CreatedAt` - the timestamp when the reaction was added.
+3. Extend the list messages endpoint (`GET /messages`) to allow for pagination. The endpoint currently only allows for fetching the latest 10 messages. We would like to be able to fetch messages in pages of 10 messages. For example, the first page should return messages 1-10, the second page should return messages 11-20, etc.
+4. Extend the list messages endpoint (`GET /messages`) to include the total reaction count as well as a list of reactions for each message.
+5. The endpoints currently don't validate the input. Please add input validation to the endpoints.
+
+### Non-Functional Requirements
+
+1. We assume this API will be heavily used and therefor needs to support lots of read and write operations to the database. Update the schema accordingly.
+2. We expect a certain level of seniority. Therefor we don't want to explicitly mention every detail you should think about. Think about this assignment as a real-world problem you need to solve. We expect you to make the necessary decisions to make the application (almost) production ready.
+
+### Reaction Schema
+
+```bash
+CREATE TABLE IF NOT EXISTS reactions (
+  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  message_id uuid NOT NULL,
+  user_id VARCHAR(255) NOT NULL,
+  reaction_type VARCHAR(255) NOT NULL,
+  reaction_score INT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+`Note: Saving reaction in a separate table since it can be used for analytics and other purposes`
+
+### Approach
+
+- Start with functional requirement and then improve the system for scalability, loose-coupling, and focus on other important metrics
+- Considering the backward compatibility, I have added `v2 versions` of the following APIs, Since the request and response schema has been updated
+  - Create Message
+  - List Messages
+
+### Limitations
+
+- Reaction API communication is synchronous and not scalable(ideally)
+- Cache is not getting updated with reactions
+- System is tightly coupled
+- Some constants are hard coded
+
+### Potential Improvements
+
+- Move the hardcoded constants to config (read from .env)
+- Update cache as soon as reaction is created for a particular message
+- Implement Async communication (Assuming that reaction score and list can be eventual consistent )
+  - Message Queue
+- Implement an API to update reaction or Remove it
+- Authentication and Authorization implementation
+
+### Sample Requests
+
+1. Create Messages (v2 Version)
+
+```bash
+curl --location 'http://localhost:8080/v2/messages' \
+--header 'Content-Type: application/json' \
+--data '{
+    "text": "hello",
+    "user_id": "testuser"
+}'
+```
+
+2. List Messages (v2 Version)
+
+```bash
+curl --location 'http://localhost:8080/v2/messages?page=1'
+```
+
+3. Create Reaction
+
+```bash
+curl --location 'http://localhost:8080/messages/fb964479-cee0-475c-8c27-fac099f12208/reactions' \
+--header 'Content-Type: application/json' \
+--data '{
+    "reaction_type": "Like",
+    "reaction_score": 1,
+    "user_id": "testuser"
+}'
+```

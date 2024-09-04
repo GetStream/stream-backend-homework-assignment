@@ -8,12 +8,17 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/GetStream/stream-backend-homework-assignment/api/schemas"
+	"github.com/GetStream/stream-backend-homework-assignment/api/validators"
 )
 
 // A DB provides a storage layer that persists messages.
 type DB interface {
 	ListMessages(ctx context.Context, offset, limit int) ([]Message, error)
 	InsertMessage(ctx context.Context, msg Message) (Message, error)
+	InsertReactionAndUpdateMessage(ctx context.Context, react ReactionV2) (ReactionV2, error)
+	FindMessage(ctx context.Context, msgId string) error
 }
 
 // A Cache provides a storage layer that caches messages.
@@ -27,9 +32,8 @@ type API struct {
 	Logger *slog.Logger
 	DB     DB
 	Cache  Cache
-
-	once sync.Once
-	mux  *http.ServeMux
+	once   sync.Once
+	mux    *http.ServeMux
 }
 
 func (a *API) setupRoutes() {
@@ -38,6 +42,10 @@ func (a *API) setupRoutes() {
 	mux.HandleFunc("GET /messages", a.listMessages)
 	mux.HandleFunc("POST /messages", a.createMessage)
 	mux.HandleFunc("POST /messages/{messageID}/reactions", a.createReaction)
+
+	// v2 apis with requested changes. Taking this approach to avoid any issues for existing clients
+	mux.HandleFunc("POST /v2/messages", a.createMessageV2)
+	mux.HandleFunc("GET /v2/messages", a.listMessagesV2)
 
 	a.mux = mux
 }
@@ -112,20 +120,7 @@ func (a *API) listMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) createMessage(w http.ResponseWriter, r *http.Request) {
-	type (
-		request struct {
-			Text   string `json:"text"`
-			UserID string `json:"user_id"`
-		}
-		response struct {
-			ID        string `json:"id"`
-			Text      string `json:"text"`
-			UserID    string `json:"user_id"`
-			CreatedAt string `json:"created_at"`
-		}
-	)
-
-	var body request
+	var body schemas.CreateMessageRequest
 	err := json.NewDecoder(r.Body).Decode(&body)
 	if err != nil {
 		a.respondError(w, http.StatusBadRequest, err, "Could not decode request body")
@@ -147,7 +142,7 @@ func (a *API) createMessage(w http.ResponseWriter, r *http.Request) {
 		a.Logger.Error("Could not cache message", "error", err.Error())
 	}
 
-	res := response{
+	res := schemas.CreateMessageResponse{
 		ID:        msg.ID,
 		Text:      msg.Text,
 		UserID:    msg.UserID,
@@ -157,31 +152,48 @@ func (a *API) createMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) createReaction(w http.ResponseWriter, r *http.Request) {
-	type (
-		request struct {
-			Type   string `json:"type"`
-			Score  int    `json:"score"`
-			UserID string `json:"user_id"`
-		}
-		response struct {
-			ID        string `json:"id"`         // reaction ID
-			MessageID string `json:"message_id"` // message ID
-			Type      string `json:"type"`       // reaction type, for example 'like', 'laugh', 'wow', 'thumbs_up'
-			Score     int    `json:"score"`      // reaction score should default to 1 if not specified, but can be any positive integer. Think of claps on Medium.com
-			UserID    string `json:"user_id"`    // the user ID submitting the reaction
-			CreatedAt string `json:"created_at"` // the date/time the reaction was created
-		}
-	)
-
 	messageID := r.PathValue("messageID")
-	var body request
+	var body schemas.MessageReactionRequest
 	err := json.NewDecoder(r.Body).Decode(&body)
 	if err != nil {
 		a.respondError(w, http.StatusBadRequest, err, "Could not decode request body")
 		return
 	}
 	r.Body.Close()
+	// input validation
+	if err := validators.ValidateReactionRequest(body); err != nil {
+		a.respondError(w, http.StatusBadRequest, err, fmt.Sprintf("Validation failed: %v", err))
+		return
+	}
 
-	err = fmt.Errorf("could not create reaction for message with id %s", messageID)
-	a.respondError(w, http.StatusNotImplemented, err, err.Error())
+	if body.ReactionScore == nil {
+		a.Logger.Debug("setting the default value for reaction score")
+		defaultScore := 1
+		body.ReactionScore = &defaultScore
+	}
+
+	// update message with reaction and reactionType. In an ideal scenario we should update the message reaction count and type via async communication (msg queue, eg message queue/fan out method)
+	react, err := a.DB.InsertReactionAndUpdateMessage(r.Context(), ReactionV2{
+		ReactionType:  string(body.ReactionType),
+		ReactionScore: *body.ReactionScore,
+		UserID:        body.UserID,
+		MessageID:     messageID,
+		CreatedAt:     time.Now(),
+	})
+
+	if err != nil {
+		a.respondError(w, http.StatusInternalServerError, err, "Could not insert reaction")
+		return
+	}
+
+	res := schemas.CreateReactionResponse{
+		ID:            react.ID,
+		MessageID:     react.MessageID,
+		UserID:        react.UserID,
+		ReactionScore: react.ReactionScore,
+		ReactionType:  react.ReactionType,
+		CreatedAt:     react.CreatedAt.Format(time.RFC1123),
+	}
+	// logs?
+	a.respond(w, http.StatusCreated, res)
 }
